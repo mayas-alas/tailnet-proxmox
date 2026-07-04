@@ -7,6 +7,17 @@ set -Eeuo pipefail
 
 # Helper functions
 
+configure_resolv_conf() {
+  local dns
+
+  (($# == 0)) && return 0
+
+  : > /etc/resolv.conf
+  for dns in "$@"; do
+    printf 'nameserver %s\n' "$dns" >> /etc/resolv.conf
+  done
+}
+
 info () { printf "%b%s%b" "\E[1;34m❯ \E[1;36m" "${1:-}" "\E[0m\n"; }
 error () { printf "%b%s%b" "\E[1;31m❯ " "ERROR: ${1:-}" "\E[0m\n" >&2; }
 warn () { printf "%b%s%b" "\E[1;31m❯ " "Warning: ${1:-}" "\E[0m\n" >&2; }
@@ -71,6 +82,11 @@ fi
 # Set shm size to 1G to prevent cluster joining issue
 mount -o remount,size=1G /dev/shm
 
+# Keep it disabled for this containerized NAT layout.
+ln -sf /dev/null /etc/systemd/system/pve-firewall.service
+ln -sf /dev/null /etc/systemd/system/pvefw-logger.service
+ln -sf /dev/null /etc/systemd/system/pve-firewall-commit.service
+
 # If missing timezone and localtime set them
 set_timezone() {
   local zone="$1"
@@ -108,6 +124,12 @@ fi
 
 # Initialize network
 . network.sh
+
+# Avoid leaking Docker's embedded DNS (127.0.0.11) into new LXC configs.
+# In multi-bridge mode, Proxmox itself uses dnsmasq on the first guest bridge.
+if [ -n "${DNS_RESOLVER:-}" ]; then
+  configure_resolv_conf "$DNS_RESOLVER"
+fi
 
 # Ensure directory permissions
 dir="/var/lib/vz"

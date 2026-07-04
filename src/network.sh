@@ -4,13 +4,20 @@ set -Eeuo pipefail
 # Docker environment variables
 
 : "${DEV:=""}"
+: "${DEVS:=""}"
 : "${MTU:=""}"
 : "${TAP:="tap0"}"
 : "${NETWORK:="Y"}"
 : "${BRIDGE:="vmbr0"}"
+: "${BRIDGES:=""}"
+: "${GATEWAYS:=""}"
 : "${MASK:="255.255.255.0"}"
 
 ADD_ERR="Please add the following setting to your container:"
+CONFIG_BRIDGES=()
+CONFIG_PORTS=()
+CONFIG_GATEWAYS=()
+DNS_RESOLVER=""
 
 # ######################################
 #  Functions
@@ -53,30 +60,61 @@ configureDNS() {
     $ranges
 
     # Set gateway address
-    dhcp-option=option:netmask,$mask
-    dhcp-option=option:router,$gateway
-    dhcp-option=option:dns-server,$gateway
+    dhcp-option=tag:$fa,option:netmask,$mask
+    dhcp-option=tag:$fa,option:router,$gateway
+    dhcp-option=tag:$fa,option:dns-server,$gateway
     address=/host.lan/$gateway
 
     # DHCP settings
     dhcp-authoritative
 
     # Windows compatibility
-    dhcp-option=252,"\n"
-    dhcp-option=vendor:MSFT,2,1i
+    dhcp-option=tag:$fa,252,"\n"
+    dhcp-option=tag:$fa,vendor:MSFT,2,1i
 EOF
+
+  return 0
+}
+
+configureDNSUpstreams() {
+
+  local dns
+  local file="/etc/dnsmasq.d/00-upstreams.conf"
+
+  sed 's/^    //' > "$file" <<EOF
+    # Upstream DNS copied from the container resolver at boot.
+    no-resolv
+    no-poll
+EOF
+
+  while IFS= read -r dns; do
+    [ -z "$dns" ] && continue
+    printf 'server=%s\n' "$dns" >> "$file"
+  done < <(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf)
 
   return 0
 }
 
 setInterfaces() {
 
-  local fa="$1"
-  local tap="$2"
-  local gateway="$3"
+  local fa="${1:-}"
+  local port="${2:-}"
+  local gateway="${3:-}"
+  local -a bridges ports gateways
+
+  if [ -n "$fa" ]; then
+    bridges=("$fa")
+    ports=("$port")
+    gateways=("$gateway")
+  else
+    bridges=("${CONFIG_BRIDGES[@]}")
+    ports=("${CONFIG_PORTS[@]}")
+    gateways=("${CONFIG_GATEWAYS[@]}")
+  fi
 
   # Add all available network interfaces
   local file="/etc/network/interfaces.new"
+  local i idx
 
   sed 's/^    //' > "$file" <<EOF
     auto lo
@@ -85,7 +123,9 @@ EOF
 
   while IFS= read -r i; do
 
-    [[ "${i,,}" == "${fa,,}" ]] && continue
+    for fa in "${bridges[@]}"; do
+      [[ "${i,,}" == "${fa,,}" ]] && continue 2
+    done
 
     sed 's/^        //' >> "$file" <<EOF
 
@@ -95,18 +135,123 @@ EOF
 
   done < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | sed 's/@.*//')
 
-  # Configure bridge
-  sed 's/^    //' >> "$file" <<EOF
+  for idx in "${!bridges[@]}"; do
+
+    fa="${bridges[$idx]}"
+    port="${ports[$idx]:-none}"
+    gateway="${gateways[$idx]}"
+
+    # Configure bridge
+    sed 's/^    //' >> "$file" <<EOF
 
     auto $fa
     iface $fa inet static
         address $gateway/24
-        bridge-ports $tap
+        bridge-ports $port
         bridge-stp off
         bridge-fd 0
+EOF
+
+  done
+
+  sed 's/^    //' >> "$file" <<EOF
 
     source /etc/network/interfaces.d/*
 EOF
+
+  return 0
+}
+
+configureGuestBridge() {
+
+  local bridge="$1"
+  local gateway="$2"
+  local uplink="$3"
+  local subnet="${gateway%.*}.0/24"
+  local broadcast="${gateway%.*}.255"
+  local tables="the 'ip_tables' kernel module is not loaded. Try this command: sudo modprobe ip_tables iptable_nat"
+
+  { ip link add dev "$bridge" type bridge ; rc=$?; } || :
+
+  if (( rc != 0 )); then
+    error "failed to create bridge '$bridge'. $ADD_ERR --cap-add NET_ADMIN" && return 1
+  fi
+
+  if ! ip address add "$gateway/24" broadcast "$broadcast" dev "$bridge"; then
+    error "failed to add IP address pool for '$bridge'!" && return 1
+  fi
+
+  while ! ip link set "$bridge" up; do
+    info "Waiting for bridge '$bridge' to become available..."
+    sleep 2
+  done
+
+  if ! iptables -t nat -A POSTROUTING -o "$uplink" -s "$subnet" ! -d "$subnet" -m comment --comment "remove" -j MASQUERADE; then
+    error "$tables" && return 1
+  fi
+
+  if ! iptables -A FORWARD -i "$bridge" -o "$uplink" -m comment --comment "remove" -j ACCEPT; then
+    error "failed to configure IP tables!" && return 1
+  fi
+
+  if ! iptables -A FORWARD -i "$uplink" -o "$bridge" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "remove" -j ACCEPT; then
+    error "failed to configure IP tables!" && return 1
+  fi
+
+  CONFIG_BRIDGES+=("$bridge")
+  CONFIG_PORTS+=("none")
+  CONFIG_GATEWAYS+=("$gateway")
+
+  configureDNS "$bridge" "$gateway" "$MASK" "$gateway" || return 1
+
+  return 0
+}
+
+configureMultiNAT() {
+
+  local -a devs bridges gateways
+  local idx uplink bridge gateway
+
+  read -r -a devs <<< "$DEVS"
+  read -r -a bridges <<< "$BRIDGES"
+  read -r -a gateways <<< "$GATEWAYS"
+
+  if ((${#devs[@]} == 0)); then
+    error "DEVS is empty, no network interfaces were specified."
+    return 1
+  fi
+
+  for idx in "${!devs[@]}"; do
+    [ -d "/sys/class/net/${devs[$idx]}" ] || {
+      error "Network interface '${devs[$idx]}' does not exist inside the container!"
+      return 1
+    }
+  done
+
+  clearTables
+  configureDNSUpstreams
+
+  for idx in "${!devs[@]}"; do
+    bridge="${bridges[$idx]:-vmbr$idx}"
+    ip link set "$bridge" down &> /dev/null || :
+    ip link delete "$bridge" &> /dev/null || :
+  done
+
+  uplink=$(awk '$2 == 00000000 { print $1; exit }' /proc/net/route)
+  [ -z "$uplink" ] && uplink="${devs[0]}"
+
+  if [[ $(< /proc/sys/net/ipv4/ip_forward) -eq 0 ]]; then
+    sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1 || :
+  fi
+
+  for idx in "${!devs[@]}"; do
+    bridge="${bridges[$idx]:-vmbr$idx}"
+    gateway="${gateways[$idx]:-172.30.$((idx + 10)).1}"
+    configureGuestBridge "$bridge" "$gateway" "$uplink" || return 1
+    [ "$idx" -eq 0 ] && DNS_RESOLVER="$gateway"
+  done
+
+  setInterfaces || return 1
 
   return 0
 }
@@ -251,6 +396,7 @@ configureNAT() {
 
   setInterfaces "$BRIDGE" "$TAP" "$gateway" || return 1
   configureDNS "$BRIDGE" "$ip" "$MASK" "$gateway" || return 1
+  DNS_RESOLVER="$gateway"
 
   return 0
 }
@@ -354,6 +500,21 @@ blockLicense
 
 msg="Initializing network..."
 [[ "$DEBUG" == [Yy1]* ]] && info "$msg"
+
+if [ -n "$DEVS" ]; then
+  if ! configureMultiNAT; then
+
+    error "failed to setup multi NAT networking!"
+    [[ "$DEBUG" != [Yy1]* ]] && exit 48
+
+  else
+
+    [[ "$DEBUG" == [Yy1]* ]] && info "Initialized network successfully..."
+
+  fi
+
+  return 0
+fi
 
 getInfo
 closeBridge

@@ -1,15 +1,33 @@
 services:
   proxmox:
     hostname: pve
-    image: dockurr/proxmox
+    build: .
+    image: proxmox
     container_name: proxmox
     environment:
       PASSWORD: "root"
+      DEVS: "eth0 eth1 eth2"
+      BRIDGES: "vmbr0 vmbr1 vmbr2"
+      GATEWAYS: "172.30.10.1 172.30.11.1 172.30.12.1"
     ports:
       - 8006:8006
     volumes:
       - ./data:/var/lib/vz
       - ./config:/var/lib/pve-cluster
+    devices:
+      - /dev/kvm:/dev/kvm
+    networks:
+      - pve0
+      - pve1
+      - pve2
     restart: always
     privileged: true
     stop_grace_period: 2m
+
+networks:
+  pve0:
+    driver: bridge
+  pve1:
+    driver: bridge
+  pve2:
+    driver: bridge
