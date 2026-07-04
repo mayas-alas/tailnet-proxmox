@@ -54,7 +54,8 @@ On Docker Desktop, ensure KVM is available before starting the stack:
 
 ```powershell
 wsl -d docker-desktop sh -lc "modprobe kvm_amd 2>/dev/null || modprobe kvm_intel"
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Check service health:
@@ -64,7 +65,7 @@ docker compose ps
 docker compose exec tailscale tailscale serve status
 ```
 
-To update from GHCR after a release:
+To update after a release:
 
 ```powershell
 docker compose pull
