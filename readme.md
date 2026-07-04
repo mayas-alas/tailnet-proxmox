@@ -7,6 +7,7 @@
 [![Build]][build_url]
 [![Version]][tag_url]
 [![Size]][tag_url]
+[![Package]][pkg_url]
 [![Pulls]][hub_url]
 
 </div></h1>
@@ -15,16 +16,16 @@ Proxmox VE inside a Docker container.
 
 ## Features ✨
 
-- **High-performance** — Identically to bare-metal thanks to KVM acceleration
-- **Fast iteration** — Spin up or tear down a PVE node quickly within seconds
-- **Easy backups** — Stores all your configuration in a volume mount
-- **Simple networking** — Comes with a pre-configured NAT bridge with DHCP
-- **LXC supported** — LXC containers work out of the box
-- **Multi-platform** — Support for ARM64 processors via PXVIRT
+ - **High-performance** — Identically to bare-metal thanks to KVM acceleration
+ - **Fast iteration** — Spin up or tear down a PVE node quickly within seconds
+ - **Easy backups** — Stores all your configuration in a volume mount
+ - **Simple networking** — Comes with a pre-configured NAT bridge with DHCP
+ - **LXC supported** — LXC containers work out of the box
+ - **Multi-platform** — Support for ARM64 processors via PXVIRT
 
 ## Usage  🐳
 
-##### Via Docker Compose:
+##### Docker Compose:
 
 ```yaml
 services:
@@ -44,13 +45,13 @@ services:
     stop_grace_period: 2m
 ```
 
-##### Via Docker CLI:
+##### Docker CLI:
 
 ```bash
 docker run -it --rm --name proxmox --hostname pve --privileged -e "PASSWORD=root" -p 8006:8006 -v "${PWD:-.}/data:/var/lib/vz" -v "${PWD:-.}/config:/var/lib/pve-cluster" --stop-timeout 120 docker.io/dockurr/proxmox
 ```
 
-##### Via Github Codespaces:
+##### GitHub Codespaces:
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dockur/proxmox)
 
@@ -59,6 +60,15 @@ docker run -it --rm --name proxmox --hostname pve --privileged -e "PASSWORD=root
 <div align="center">
 <a href="https://github.com/dockur/proxmox"><img src="https://raw.githubusercontent.com/dockur/proxmox/master/.github/screenshot.png" title="Screenshot" style="max-width:100%;" width="256" /></a>
 </div>
+
+## Requirements ⚙️
+
+ - A Linux host with KVM support, or Docker Desktop / Podman on Windows 11 with nested virtualization enabled.
+ - At least 2 GB of RAM available.
+ - At least 32 GB of free disk space.
+
+> [!NOTE]
+> Docker Desktop on macOS and Windows 10 do not currently provide the required KVM support for this image.
 
 ## FAQ 💬
 
@@ -96,7 +106,7 @@ docker run -it --rm --name proxmox --hostname pve --privileged -e "PASSWORD=root
 
 ### Are there containers available for other Proxmox products?
 
-  Yes, see our [Proxmox Backup Server](https://github.com/dockur/proxmox-backup) and [Proxmox Datacenter Manager](https://github.com/dockur/proxmox-dm) containers.
+  Yes, see our [Proxmox Backup Server](https://github.com/dockur/proxmox-backup), [Proxmox Datacenter Manager](https://github.com/dockur/proxmox-dm) and [Proxmox Mail Gateway](https://github.com/dockur/proxmox-mail) containers.
 
 ### How do I verify if my system supports the KVM virtualization used by Proxmox?
 
@@ -122,14 +132,18 @@ docker run -it --rm --name proxmox --hostname pve --privileged -e "PASSWORD=root
 
   - you enabled "nested virtualization" if you are running the container inside a virtual machine.
 
-  - you are not using a cloud provider, as most of them do not allow nested virtualization for their VPS's.
+  - you are not using a cloud provider, as most of them do not allow nested virtualization for their VPSs.
 
 ## Acknowledgements 🙏
 
 Special thanks to [rtedpro-cpu](https://github.com/rtedpro-cpu) and [LongQT-sea](https://github.com/LongQT-sea), this project would not exist without their invaluable work.
 
 ## Stars 🌟
-[![Stars](https://starchart.cc/dockur/proxmox.svg?variant=adaptive)](https://starchart.cc/dockur/proxmox)
+[![Stargazers](https://raw.githubusercontent.com/star-stats/stars/refs/heads/data/charts/dockur-proxmox.svg)](https://github.com/dockur/proxmox/stargazers)
+
+## Disclaimer ⚖️
+
+*The product names, logos, brands, and other trademarks referred to within this project are the property of their respective trademark holders. This project is not affiliated, sponsored, or endorsed by Proxmox Server Solutions GmbH.*
 
 [build_url]: https://github.com/dockur/proxmox/
 [hub_url]: https://hub.docker.com/r/dockurr/proxmox/
