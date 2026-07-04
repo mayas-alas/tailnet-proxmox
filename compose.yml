@@ -27,16 +27,19 @@ configs:
 services:
   proxmox:
     hostname: pve
-    build: .
-    image: proxmox
+    build:
+      context: .
+      args:
+        VERSION_ARG: "0.0.1"
+        PRODUCT_NAME: Tailnet Proxmox
+        SUPPORT_URL: https://github.com/mayas-alas/tailnet-proxmox
+    image: ghcr.io/mayas-alas/tailnet-proxmox:0.0.1
     container_name: proxmox
     environment:
-      PASSWORD: "root"
-      DEVS: "eth0 eth1 eth2"
-      BRIDGES: "vmbr0 vmbr1 vmbr2"
-      GATEWAYS: "172.30.10.1 172.30.11.1 172.30.12.1"
-    ports:
-      - 8006:8006
+      PASSWORD: ${PASSWORD:?PASSWORD is required}
+      DEVS: ${DEVS:?DEVS is required}
+      BRIDGES: ${BRIDGES:?BRIDGES is required}
+      GATEWAYS: ${GATEWAYS:?GATEWAYS is required}
     volumes:
       - ./data:/var/lib/vz
       - ./config:/var/lib/pve-cluster

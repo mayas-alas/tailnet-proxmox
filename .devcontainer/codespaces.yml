@@ -1,7 +1,13 @@
 services:
   proxmox:
     hostname: pve
-    image: dockurr/proxmox
+    build:
+      context: ..
+      args:
+        VERSION_ARG: "0.0.1"
+        PRODUCT_NAME: Tailnet Proxmox
+        SUPPORT_URL: https://github.com/mayas-alas/tailnet-proxmox
+    image: ghcr.io/mayas-alas/tailnet-proxmox:0.0.1
     container_name: proxmox
     environment:
       PASSWORD: "root"

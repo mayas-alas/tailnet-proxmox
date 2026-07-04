@@ -6,7 +6,9 @@ FROM --platform=linux/arm64 debian:trixie-slim AS base-arm64
 FROM base-${TARGETARCH} AS base
 
 ARG TARGETARCH
-ARG VERSION_ARG="0.0"
+ARG VERSION_ARG="0.0.1"
+ARG PRODUCT_NAME="Tailnet Proxmox"
+ARG SUPPORT_URL="https://github.com/mayas-alas/tailnet-proxmox"
 
 ARG DEBCONF_NOWARNINGS="yes"
 ARG DEBIAN_FRONTEND="noninteractive"
@@ -182,8 +184,8 @@ IUD
   # Update PVE banner to display the IPv4 address
   sed -i "s|https://\${urlip}:8006/|http://127.0.0.1:8006|g" /usr/bin/pvebanner
   sed -i "s|https://\${localip}:8006/|http://127.0.0.1:8006|g" /usr/bin/pvebanner
-  sed -i "s|the Proxmox Virtual Environment\.|Proxmox for Docker v${VERSION_ARG}.|g" /usr/bin/pvebanner
-  sed -i "s|the Pxvirt Powered by Lierfang\.|Proxmox for Docker v${VERSION_ARG}.|g" /usr/bin/pvebanner
+  sed -i "s|the Proxmox Virtual Environment\.|${PRODUCT_NAME} v${VERSION_ARG}.|g" /usr/bin/pvebanner
+  sed -i "s|the Pxvirt Powered by Lierfang\.|${PRODUCT_NAME} v${VERSION_ARG}.|g" /usr/bin/pvebanner
 
   # Remove kernel modules and boot files — useless in a container (~960 MB)
   rm -rf /usr/lib/modules /boot
@@ -224,6 +226,8 @@ IUD
 
   # Store version number
   echo "$VERSION_ARG" > /etc/version
+  echo "$PRODUCT_NAME" > /etc/product-name
+  echo "$SUPPORT_URL" > /etc/support-url
 
   # Remove stub
   rm /usr/local/sbin/systemctl
@@ -236,6 +240,12 @@ WORKDIR /usr/local/bin
 COPY --chmod=755 ./src /usr/local/bin/
 
 ENV PASSWORD="root"
+
+LABEL org.opencontainers.image.title="Tailnet Proxmox" \
+      org.opencontainers.image.version="${VERSION_ARG}" \
+      org.opencontainers.image.url="https://github.com/mayas-alas/tailnet-proxmox" \
+      org.opencontainers.image.source="https://github.com/mayas-alas/tailnet-proxmox" \
+      org.opencontainers.image.documentation="https://github.com/mayas-alas/tailnet-proxmox/blob/master/readme.md"
 
 EXPOSE 8006
 

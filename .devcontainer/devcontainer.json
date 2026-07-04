@@ -1,5 +1,5 @@
 {
-  "name": "Proxmox",
+  "name": "Tailnet Proxmox",
   "service": "proxmox",
   "forwardPorts": [8006],
   "portsAttributes": {

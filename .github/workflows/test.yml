@@ -1,11 +1,15 @@
+name: Test
+
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   pull_request:
 
-name: "Test"
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
-  shellcheck:
-    name: Test
+  checks:
     uses: ./.github/workflows/check.yml

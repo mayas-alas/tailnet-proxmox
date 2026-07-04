@@ -237,8 +237,8 @@ require_cmd mountpoint
 require_cmd chpasswd
 
 # Display version number
-info "Starting Proxmox for Docker v$(</etc/version)..."
-info "For support visit https://github.com/dockur/proxmox"
+info "Starting $(</etc/product-name) v$(</etc/version)..."
+info "For support visit $(</etc/support-url)"
 echo ""
 
 # Check command before doing one-time setup.

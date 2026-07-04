@@ -5,6 +5,10 @@
 .gitignore
 .gitlab-ci.yml
 .gitmodules
+.env
+assets
+config
+data
 Dockerfile
 Dockerfile.archive
 compose.yml

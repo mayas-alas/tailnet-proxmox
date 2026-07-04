@@ -1,157 +1,117 @@
-<h1 align="center">Proxmox<br />
-<div align="center">
-<a href="https://github.com/dockur/proxmox/"><img src="https://github.com/dockur/proxmox/raw/master/.github/logo.png" title="Logo" style="max-width:100%;" width="128" /></a>
-</div>
-<div align="center">
+<h1 align="center">Tailnet Proxmox</h1>
 
-[![Build]][build_url]
-[![Version]][tag_url]
-[![Size]][tag_url]
-[![Package]][pkg_url]
-[![Pulls]][hub_url]
+<p align="center">
+  <img src="assets/logo.png" alt="Tailnet High-Performance" width="320">
+</p>
 
-</div></h1>
+<p align="center"><strong>Proxmox VE containerizado con KVM, tres bridges y acceso privado mediante Tailscale.</strong></p>
 
-Proxmox VE inside a Docker container.
+## Version
 
-## Features ✨
+Current release: `v0.0.1`
 
- - **High-performance** — Identically to bare-metal thanks to KVM acceleration
- - **Fast iteration** — Spin up or tear down a PVE node quickly within seconds
- - **Easy backups** — Stores all your configuration in a volume mount
- - **Simple networking** — Comes with a pre-configured NAT bridge with DHCP
- - **LXC supported** — LXC containers work out of the box
- - **Multi-platform** — Support for ARM64 processors via PXVIRT
+Repository: [github.com/mayas-alas/tailnet-proxmox](https://github.com/mayas-alas/tailnet-proxmox)
 
-## Usage  🐳
+Container image: `ghcr.io/mayas-alas/tailnet-proxmox:0.0.1`
 
-##### Docker Compose:
+## Included
 
-```yaml
-services:
-  proxmox:
-    hostname: pve
-    image: dockurr/proxmox
-    container_name: proxmox
-    environment:
-      PASSWORD: "root"
-    ports:
-      - 8006:8006
-    volumes:
-      - ./data:/var/lib/vz
-      - ./config:/var/lib/pve-cluster
-    restart: always
-    privileged: true
-    stop_grace_period: 2m
+- Proxmox VE running with systemd inside Docker.
+- KVM acceleration through `/dev/kvm`.
+- Three Docker interfaces mapped to `vmbr0`, `vmbr1` and `vmbr2`.
+- NAT, DHCP and DNS for internal guests.
+- Persistent Proxmox configuration and storage.
+- Private HTTPS access through Tailscale Serve.
+- SSH forwarding from Tailnet port `2222` to the PVE host.
+
+## Requirements
+
+- Docker Desktop on Windows 11 or Docker Engine on Linux.
+- Nested virtualization and a working `/dev/kvm` device.
+- `/dev/net/tun` for the Tailscale sidecar.
+- A reusable or ephemeral Tailscale authentication key.
+- At least 2 GB of RAM and 32 GB of available storage.
+
+## Configuration
+
+Create `.env` from `.env.example` and provide your Tailnet values:
+
+```dotenv
+TS_AUTHKEY=
+TS_HOSTNAME=proxmox
+TS_CERT_DOMAIN=proxmox.example-tailnet.ts.net
+PASSWORD=root
+DEVS=eth0 eth1 eth2
+BRIDGES=vmbr0 vmbr1 vmbr2
+GATEWAYS=172.30.10.1 172.30.11.1 172.30.12.1
 ```
 
-##### Docker CLI:
+The real `.env` file is ignored by Git. Do not commit Tailscale keys or production passwords.
+
+## Start
+
+On Docker Desktop, ensure KVM is available before starting the stack:
+
+```powershell
+wsl -d docker-desktop sh -lc "modprobe kvm_amd 2>/dev/null || modprobe kvm_intel"
+docker compose up -d --build
+```
+
+Check service health:
+
+```powershell
+docker compose ps
+docker compose exec tailscale tailscale serve status
+```
+
+To update from GHCR after a release:
+
+```powershell
+docker compose pull
+docker compose up -d
+```
+
+Because the repository and package are private, Docker must be authenticated to `ghcr.io` with a token that has `read:packages` permission.
+
+## Access
+
+The Proxmox panel is intentionally not published on a host port. Open the HTTPS address configured in `TS_CERT_DOMAIN` from a device connected to the same Tailnet.
+
+SSH to the PVE system is forwarded through Tailnet port `2222`:
 
 ```bash
-docker run -it --rm --name proxmox --hostname pve --privileged -e "PASSWORD=root" -p 8006:8006 -v "${PWD:-.}/data:/var/lib/vz" -v "${PWD:-.}/config:/var/lib/pve-cluster" --stop-timeout 120 docker.io/dockurr/proxmox
+ssh -p 2222 root@proxmox
 ```
 
-##### GitHub Codespaces:
+Tailscale SSH remains enabled on the sidecar itself. Port `2222` is the explicit path to the PVE SSH service.
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dockur/proxmox)
+## Networking
 
-## Screenshot 📸
+| Docker NIC | PVE bridge | Guest gateway |
+| --- | --- | --- |
+| `eth0` | `vmbr0` | `172.30.10.1` |
+| `eth1` | `vmbr1` | `172.30.11.1` |
+| `eth2` | `vmbr2` | `172.30.12.1` |
 
-<div align="center">
-<a href="https://github.com/dockur/proxmox"><img src="https://raw.githubusercontent.com/dockur/proxmox/master/.github/screenshot.png" title="Screenshot" style="max-width:100%;" width="256" /></a>
-</div>
+The Tailscale sidecar joins only `pve0`. Proxmox remains connected to all three Docker networks and exposes its internal HTTPS and SSH services to the sidecar through the `pve-backend` alias.
 
-## Requirements ⚙️
+## Persistence
 
- - A Linux host with KVM support, or Docker Desktop / Podman on Windows 11 with nested virtualization enabled.
- - At least 2 GB of RAM available.
- - At least 32 GB of free disk space.
+| Host path | Container path | Purpose |
+| --- | --- | --- |
+| `./config` | `/var/lib/pve-cluster` | PVE cluster and node configuration |
+| `./data` | `/var/lib/vz` | Templates, ISO images, backups and virtual disks |
+| `tailscale-state` | `/var/lib/tailscale` | Tailscale identity and state |
 
-> [!NOTE]
-> Docker Desktop on macOS and Windows 10 do not currently provide the required KVM support for this image.
+Removing the Proxmox container does not delete these paths. Deleting `config` or `data` starts the corresponding PVE state from scratch.
 
-## FAQ 💬
+## Security Notes
 
-### How do I use it?
+- The Proxmox web interface has no host port binding by default.
+- Tailscale Serve terminates trusted Tailnet HTTPS and proxies to PVE's internal self-signed HTTPS endpoint.
+- Tailnet ACLs and SSH rules still determine who can connect.
+- The PVE firewall services are masked because they conflict with the container-managed NAT layout.
 
-  Very simple! These are the steps:
-  
-  - Start the container and connect to [port 8006](http://127.0.0.1:8006/) using your web browser.
+## License And Trademarks
 
-  - Login using the username `root` and the password you specified in the `PASSWORD` environment variable.
-  
-  Enjoy your time with your brand new Proxmox VE installation, and don't forget to star this repo!
-
-### How do I change the location of the storage pool?
-
-  To change the location for the `local` storage pool used by Proxmox to store large objects like disk images and .iso files, include the following bind mount in your compose file:
-
-  ```yaml
-  volumes:
-    - ./data:/var/lib/vz
-  ```
-
-  Replace the example path `./data` with the desired storage folder or named volume.
-
-### How do I change the location of the configuration data?
-
-  To change the location of your Proxmox VE configuration data, include the following bind mount in your compose file:
-  
-  ```yaml
-  volumes:
-    - ./config:/var/lib/pve-cluster
-  ```
-
-  Replace the example path `./config` with the desired storage folder or named volume.
-
-### Are there containers available for other Proxmox products?
-
-  Yes, see our [Proxmox Backup Server](https://github.com/dockur/proxmox-backup), [Proxmox Datacenter Manager](https://github.com/dockur/proxmox-dm) and [Proxmox Mail Gateway](https://github.com/dockur/proxmox-mail) containers.
-
-### How do I verify if my system supports the KVM virtualization used by Proxmox?
-
-  First check if your software is compatible using this chart:
-
-  | **Product**  | **Linux** | **Win11** | **Win10** | **macOS** |
-  |---|---|---|---|---|
-  | Docker CLI        | ✅   | ✅       | ❌        | ❌ |
-  | Docker Desktop    | ❌   | ✅       | ❌        | ❌ | 
-  | Podman CLI        | ✅   | ✅       | ❌        | ❌ | 
-  | Podman Desktop    | ✅   | ✅       | ❌        | ❌ | 
-
-  After that you can run the following commands in Linux to check your system:
-
-  ```bash
-  sudo apt install cpu-checker
-  sudo kvm-ok
-  ```
-
-  If you receive an error from `kvm-ok` indicating that KVM cannot be used, please check whether:
-
-  - the virtualization extensions (`Intel VT-x` or `AMD SVM`) are enabled in your BIOS.
-
-  - you enabled "nested virtualization" if you are running the container inside a virtual machine.
-
-  - you are not using a cloud provider, as most of them do not allow nested virtualization for their VPSs.
-
-## Acknowledgements 🙏
-
-Special thanks to [rtedpro-cpu](https://github.com/rtedpro-cpu) and [LongQT-sea](https://github.com/LongQT-sea), this project would not exist without their invaluable work.
-
-## Stars 🌟
-[![Stargazers](https://raw.githubusercontent.com/star-stats/stars/refs/heads/data/charts/dockur-proxmox.svg)](https://github.com/dockur/proxmox/stargazers)
-
-## Disclaimer ⚖️
-
-*The product names, logos, brands, and other trademarks referred to within this project are the property of their respective trademark holders. This project is not affiliated, sponsored, or endorsed by Proxmox Server Solutions GmbH.*
-
-[build_url]: https://github.com/dockur/proxmox/
-[hub_url]: https://hub.docker.com/r/dockurr/proxmox/
-[tag_url]: https://hub.docker.com/r/dockurr/proxmox/tags
-[pkg_url]: https://github.com/dockur/proxmox/pkgs/container/proxmox
-
-[Build]: https://github.com/dockur/proxmox/actions/workflows/build.yml/badge.svg
-[Size]: https://img.shields.io/docker/image-size/dockurr/proxmox/latest?color=066da5&label=size
-[Pulls]: https://img.shields.io/docker/pulls/dockurr/proxmox.svg?style=flat&label=pulls&logo=docker
-[Version]: https://img.shields.io/docker/v/dockurr/proxmox/latest?arch=amd64&sort=semver&color=066da5
-[Package]: https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2Fdockur%2Fproxmox%2Fproxmox.json&query=%24.downloads&logo=github&style=flat&color=066da5&label=pulls
+See [license.md](license.md). Proxmox product names and trademarks belong to their respective owners. This project is not affiliated with or endorsed by Proxmox Server Solutions GmbH.
