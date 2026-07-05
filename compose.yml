@@ -27,7 +27,8 @@ configs:
 services:
   proxmox:
     hostname: pve
-    image: ghcr.io/mayas-alas/tailnet-proxmox:0.0.1
+    build: .
+    image: tailnet-proxmox:0.0.1
     container_name: proxmox
     environment:
       PASSWORD: ${PASSWORD:?PASSWORD is required}

@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # Docker environment variables
 : "${DEBUG:="N"}"            # Enable debugging
 : "${PASSWORD:="root"}"      # Default password
-: "${REQUIRE_KVM:="Y"}"      # Require /dev/kvm by default
+: "${REQUIRE_KVM:="N"}"      # Require /dev/kvm by default
 : "${REQUIRE_FUSE:="Y"}"     # Require /dev/fuse by default
 : "${SHM_SIZE:="1G"}"        # Remount /dev/shm to this size
 
