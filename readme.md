@@ -3,9 +3,14 @@
 Minimal maintained copy of [dockur/proxmox](https://github.com/dockur/proxmox),
 updated to upstream commit `5fccb4a7b902f6f150fb440582d7b946bce91042`.
 
-The Dockerfile has one functional change: it **does not download or install
-pve-fake-subscription**. Native Proxmox subscription behavior is retained.
-`src/entrypoint.sh` and `src/network.sh` are unchanged upstream files. The previous
+Two narrowly scoped removals restore native Proxmox subscription behavior:
+- Dockerfile: **no download or installation of pve-fake-subscription**.
+- `src/network.sh`: **no blockLicense function or license-server /etc/hosts override**.
+
+`src/entrypoint.sh` is unchanged upstream. No fake subscription cache, periodic
+activation, license-server blocking or UI nag bypass is added. The official
+no-subscription apt repository is not a fake license; container build stubs,
+container-required service fixes and upstream NAT remain. The previous
 custom Tailscale, bridges, branding and devcontainer rules have been removed.
 Network policy, CA, credentials, volumes and workloads belong to the consuming
 product, not to this image repository.

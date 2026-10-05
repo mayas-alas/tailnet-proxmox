@@ -6,7 +6,7 @@ on:
       version:
         description: Immutable image release
         required: true
-        default: 9.2.21-gnx.1
+        default: 9.2.21-gnx.2
   push:
     tags: ["v*"]
 
@@ -50,8 +50,13 @@ jobs:
           start = recipe.index("  # Disable subscription nag popup\n")
           end = recipe.index("  # Prevent system updates\n", start)
           assert Path("Dockerfile").read_text() == recipe[:start] + recipe[end:]
-          for path in ("src/entrypoint.sh", "src/network.sh"):
-              assert Path(path).read_text() == upstream(path)
+          assert Path("src/entrypoint.sh").read_text() == upstream("src/entrypoint.sh")
+          network = upstream("src/network.sh")
+          start = network.index("blockLicense() {\n")
+          end = network.index("# ######################################", start)
+          network = network[:start] + network[end:]
+          network = network.replace("blockLicense\n\n", "", 1)
+          assert Path("src/network.sh").read_text() == network
           PY
           bash -n src/entrypoint.sh src/network.sh
       - name: Build linux/amd64 OCI
@@ -72,8 +77,10 @@ jobs:
           docker run --rm --network=none --entrypoint /bin/bash tailnet-proxmox:test -c '
             set -euo pipefail
             packages=$(dpkg-query -W -f="\${binary:Package}\n")
-            ! grep -qx pve-fake-subscription <<< "$packages"
+            if grep -qx pve-fake-subscription <<< "$packages"; then exit 1; fi
             test ! -e /tmp/sub.deb
+            test ! -e /etc/subscription
+            if grep -Eq "blockLicense|shop\\.maurer-it\\.com" /usr/local/bin/network.sh; then exit 1; fi
             bash -n /usr/local/bin/entrypoint.sh /usr/local/bin/network.sh
             dpkg-query -W proxmox-ve pve-manager qemu-server pve-container
           '
@@ -97,6 +104,9 @@ jobs:
           # Product gateway/CA validation is unchanged and never bypasses TLS.
           docker exec proxmox-smoke curl --fail --silent --insecure https://127.0.0.1:8006/ >/dev/null
           docker exec proxmox-smoke python3 -c 'import fcntl,os; fd=os.open("/dev/kvm",os.O_RDWR); assert fcntl.ioctl(fd,0xAE00,0)>=12; os.close(fd)'
+          docker exec proxmox-smoke test -r /etc/hosts
+          if docker exec proxmox-smoke grep -Eq '(^|[[:space:]])shop\.maurer-it\.com([[:space:]]|$)' /etc/hosts; then exit 1; fi
+          docker exec proxmox-smoke test ! -e /etc/subscription
           docker exec proxmox-smoke qm list
           docker exec proxmox-smoke pct list
       - name: Clean test container
