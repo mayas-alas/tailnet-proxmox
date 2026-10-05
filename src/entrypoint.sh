@@ -4,51 +4,83 @@ set -Eeuo pipefail
 # Docker environment variables
 : "${DEBUG:="N"}"            # Enable debugging
 : "${PASSWORD:="root"}"      # Default password
-: "${REQUIRE_KVM:="N"}"      # Require /dev/kvm by default
+: "${PASSWORD_HASH:=""}"     # Default password hash
+: "${REQUIRE_KVM:="Y"}"      # Require /dev/kvm by default
 : "${REQUIRE_FUSE:="Y"}"     # Require /dev/fuse by default
 : "${SHM_SIZE:="1G"}"        # Remount /dev/shm to this size
 
 # Helper functions
-configure_resolv_conf() {
-  local dns
-
-  (($# == 0)) && return 0
-
-  : > /etc/resolv.conf
-  for dns in "$@"; do
-    printf 'nameserver %s\n' "$dns" >> /etc/resolv.conf
-  done
-}
-
 info () { printf "%b%s%b" "\E[1;34m❯ \E[1;36m" "${1:-}" "\E[0m\n"; }
 error () { printf "%b%s%b" "\E[1;31m❯ " "ERROR: ${1:-}" "\E[0m\n" >&2; }
 warn () { printf "%b%s%b" "\E[1;31m❯ " "Warning: ${1:-}" "\E[0m\n" >&2; }
 
-is_enabled() {
-  case "${1:-}" in
-    Y|y|YES|yes|TRUE|true|1|ON|on) return 0 ;;
+strip() {
+  local value="${1:-}"
+
+  # Remove surrounding whitespace
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  # Remove leading/trailing single/double quotes
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+
+  # Remove surrounding whitespace again
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  printf '%s' "$value"
+}
+
+enabled() {
+
+  local value
+  value=$(strip "${1:-}")
+
+  case "${value,,}" in
+    y|yes|true|1|on|enable|enabled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+disabled() {
+
+  local value
+  value=$(strip "${1:-}")
+
+  case "${value,,}" in
+    n|no|none|false|0|off|disable|disabled) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 require_cmd() {
+
   command -v "$1" >/dev/null 2>&1 || {
     error "Required command not found: $1"
     exit 21
   }
+
+  return 0
 }
 
 require_file() {
+
   [ -f "$1" ] || {
     error "Required file not found: $1"
     exit 22
   }
+
+  return 0
 }
 
 continue_or_exit() {
+
   local code="$1"
 
-  if is_enabled "$DEBUG"; then
+  if enabled "$DEBUG"; then
     warn "DEBUG is enabled (DEBUG=${DEBUG}), continuing despite previous error."
     return 0
   fi
@@ -57,6 +89,7 @@ continue_or_exit() {
 }
 
 check_privileged() {
+
   local cap_bnd
   local last_cap
   local max_cap
@@ -71,10 +104,13 @@ check_privileged() {
     error "Please start the container with the --privileged flag!"
     continue_or_exit 14
   fi
+
+  return 0
 }
 
 check_fuse() {
-  if ! is_enabled "$REQUIRE_FUSE"; then
+
+  if disabled "$REQUIRE_FUSE"; then
     return 0
   fi
 
@@ -87,13 +123,15 @@ check_fuse() {
     error "/dev/fuse exists but is not readable/writable."
     continue_or_exit 17
   fi
+
+  return 0
 }
 
 check_kvm() {
   local kvm_err=""
   local flags=""
 
-  if ! is_enabled "$REQUIRE_KVM"; then
+  if disabled "$REQUIRE_KVM"; then
     return 0
   fi
 
@@ -117,9 +155,65 @@ check_kvm() {
     error "KVM acceleration is not available $kvm_err."
     continue_or_exit 19
   fi
+
+  return 0
+}
+
+check_kernel_features() {
+
+  local kernel_release
+  local kernel_version
+  local kernel_major
+  local kernel_minor
+  local io_uring_disabled=""
+  local probe=""
+
+  kernel_release="$(uname -r)"
+  kernel_version="${kernel_release%%-*}"
+  IFS=. read -r kernel_major kernel_minor _ <<< "$kernel_version"
+  kernel_major="${kernel_major:-0}"
+  kernel_minor="${kernel_minor:-0}"
+
+  if (( kernel_major < 3 || (kernel_major == 3 && kernel_minor < 15) )); then
+    warn "Host kernel ${kernel_release} is older than Linux 3.15, the minimum supported by systemd 257. The container may not work correctly; upgrading the host kernel is recommended."
+  fi
+
+  if [ -r /proc/sys/kernel/io_uring_disabled ]; then
+    io_uring_disabled="$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || true)"
+
+    if [ "$io_uring_disabled" = "2" ]; then
+      warn "io_uring is disabled by the host kernel. Proxmox defaults compatible VM disks to aio=io_uring, so affected VMs may fail to start. Enable io_uring on the host or set the disk Async IO mode to threads."
+      return 0
+    fi
+  fi
+
+  if command -v qemu-img >/dev/null 2>&1; then
+    probe="/tmp/.proxmox-io-uring.$$"
+    : > "$probe"
+
+    if ! qemu-img info --image-opts "driver=raw,file.driver=file,file.filename=$probe,file.aio=io_uring" >/dev/null 2>&1; then
+      rm -f "$probe"
+
+      if (( kernel_major < 5 || (kernel_major == 5 && kernel_minor < 1) )); then
+        warn "Host kernel ${kernel_release} does not provide usable io_uring support. Proxmox defaults compatible VM disks to aio=io_uring, so affected VMs may fail to start. Upgrade the host kernel or set the disk Async IO mode to threads."
+      else
+        warn "io_uring is unavailable from inside this container. Check host kernel and container security restrictions. Proxmox defaults compatible VM disks to aio=io_uring, so affected VMs may fail to start; set the disk Async IO mode to threads if io_uring cannot be enabled."
+      fi
+    fi
+
+    rm -f "$probe"
+    return 0
+  fi
+
+  if (( kernel_major < 5 || (kernel_major == 5 && kernel_minor < 1) )); then
+    warn "Host kernel ${kernel_release} predates upstream io_uring support in Linux 5.1. Proxmox defaults compatible VM disks to aio=io_uring, so affected VMs may fail to start. Upgrade the host kernel or set the disk Async IO mode to threads."
+  fi
+
+  return 0
 }
 
 check_cgroups() {
+
   if [ ! -d /sys/fs/cgroup ]; then
     error "/sys/fs/cgroup is missing. systemd inside the container will not work correctly."
     continue_or_exit 25
@@ -132,9 +226,12 @@ check_cgroups() {
   if [ ! -f /sys/fs/cgroup/cgroup.controllers ] && [ ! -d /sys/fs/cgroup/system.slice ]; then
     warn "Could not clearly detect cgroup v2 or a systemd cgroup hierarchy."
   fi
+
+  return 0
 }
 
 check_systemd_command() {
+
   if [ "$#" -eq 0 ]; then
     error "No command specified. This image should normally be started with systemd as PID 1."
     exit 26
@@ -148,9 +245,12 @@ check_systemd_command() {
       warn "Container command is '$*'. For Proxmox VE this should usually be systemd, for example: /sbin/init"
       ;;
   esac
+
+  return 0
 }
 
 remount_shm() {
+
   if [ ! -d /dev/shm ]; then
     warn "/dev/shm does not exist."
     return 0
@@ -164,6 +264,8 @@ remount_shm() {
   if ! mount -o "remount,size=${SHM_SIZE}" /dev/shm; then
     warn "Could not remount /dev/shm with size=${SHM_SIZE}."
   fi
+
+  return 0
 }
 
 set_timezone() {
@@ -179,6 +281,7 @@ set_timezone() {
 }
 
 check_localtime() {
+
   if [ ! -e /etc/localtime ] && [ ! -L /etc/localtime ]; then
     return 1
   fi
@@ -195,6 +298,7 @@ check_localtime() {
 }
 
 prepare_directory() {
+
   local path="$1"
   local owner="$2"
   local mode="${3:-}"
@@ -205,9 +309,12 @@ prepare_directory() {
   if [ -n "$mode" ]; then
     chmod "$mode" "$path" || :
   fi
+
+  return 0
 }
 
 cleanup_stale_runtime_files() {
+
   rm -f \
     /run/pveproxy/pveproxy.pid \
     /run/pvedaemon/pvedaemon.pid \
@@ -223,6 +330,8 @@ cleanup_stale_runtime_files() {
     /run/postfix/master.pid \
     /var/spool/postfix/pid/master.pid \
     /proxmox.end 2>/dev/null || :
+
+    return 0
 }
 
 # Check environment
@@ -237,29 +346,28 @@ require_cmd mountpoint
 require_cmd chpasswd
 
 # Display version number
-info "Starting $(</etc/product-name) v$(</etc/version)..."
-info "For support visit $(</etc/support-url)"
+info "Starting Proxmox for Docker v$(</etc/version)..."
+info "For support visit https://github.com/dockur/proxmox"
 echo ""
 
 # Check command before doing one-time setup.
 check_systemd_command "$@"
 
-# Update password for root
-printf 'root:%s\n' "$PASSWORD" | chpasswd
+if [ -n "$PASSWORD_HASH" ]; then
+  printf 'root:%s\n' "$PASSWORD_HASH" | chpasswd -e
+else
+  printf 'root:%s\n' "$PASSWORD" | chpasswd
+fi
 
 # Runtime checks
 check_privileged
 check_cgroups
 check_fuse
 check_kvm
+check_kernel_features
 
 # Set shm size to prevent cluster joining issues.
 remount_shm
-
-# Keep it disabled for this containerized NAT layout.
-ln -sf /dev/null /etc/systemd/system/pve-firewall.service
-ln -sf /dev/null /etc/systemd/system/pvefw-logger.service
-ln -sf /dev/null /etc/systemd/system/pve-firewall-commit.service
 
 # If missing timezone and localtime set them.
 if [ -n "${TZ:-}" ]; then
@@ -271,12 +379,6 @@ fi
 # Initialize network
 # shellcheck source=src/network.sh
 . /usr/local/bin/network.sh
-
-# Avoid leaking Docker's embedded DNS (127.0.0.11) into new LXC configs.
-# In multi-bridge mode, Proxmox itself uses dnsmasq on the first guest bridge.
-if [ -n "${DNS_RESOLVER:-}" ]; then
-  configure_resolv_conf "$DNS_RESOLVER"
-fi
 
 # Ensure directory permissions.
 prepare_directory "/var/lib/vz" "root:root" "0755"

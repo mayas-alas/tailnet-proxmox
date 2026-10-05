@@ -6,9 +6,7 @@ FROM --platform=linux/arm64 debian:trixie-slim AS base-arm64
 FROM base-${TARGETARCH} AS base
 
 ARG TARGETARCH
-ARG VERSION_ARG="0.0.1"
-ARG PRODUCT_NAME="Tailnet Proxmox"
-ARG SUPPORT_URL="https://github.com/mayas-alas/tailnet-proxmox"
+ARG VERSION_ARG="0.0"
 
 ARG DEBCONF_NOWARNINGS="yes"
 ARG DEBIAN_FRONTEND="noninteractive"
@@ -38,6 +36,7 @@ RUN <<EOF
     gnupg \
     procps \
     chrony \
+    ipcalc \
     postfix \
     ethtool \
     dnsmasq \
@@ -63,19 +62,11 @@ RUN <<EOF
     isc-dhcp-client
 
   # Add Proxmox archive keyring
-  if [[ "$TARGETARCH" == "amd64" ]]; then
-    KEY_URL="https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg"
-    KEY_PATH="/usr/share/keyrings/proxmox-archive-keyring.gpg"
-    URI="http://download.proxmox.com/debian/pve"
-    SUITE="trixie"
-    COMPONENT="pve-no-subscription"
-  elif [[ "$TARGETARCH" == "arm64" ]]; then
-    KEY_URL="https://mirrors.lierfang.com/pxcloud/lierfang.gpg"
-    KEY_PATH="/usr/share/keyrings/lierfang.gpg"
-    URI="https://mirrors.lierfang.com/pxcloud/pxvirt"
-    SUITE="trixie"
-    COMPONENT="main"
-  fi
+  KEY_URL="https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg"
+  KEY_PATH="/usr/share/keyrings/proxmox-archive-keyring.gpg"
+  URI="http://download.proxmox.com/debian/pve"
+  SUITE="trixie"
+  COMPONENT="pve-no-subscription"
 
   curl -fsSL "${KEY_URL}" -o "${KEY_PATH}"
 
@@ -121,13 +112,6 @@ shift\n[ $# -gt 0 ] && exec "$@"\nexit 0\n' > /usr/bin/unshare
     /etc/apt/sources.list.d/pve-enterprise.sources \
     /etc/apt/sources.list.d/ceph.list \
     /etc/apt/sources.list.d/ceph.sources
-
-  # Disable subscription nag popup
-  if [[ "$TARGETARCH" == "amd64" ]]; then
-    wget https://github.com/Jamesits/pve-fake-subscription/releases/download/v0.0.11/pve-fake-subscription_0.0.11+git-1_all.deb -O /tmp/sub.deb -q --timeout=10
-    apt-get install -y --no-install-recommends /tmp/sub.deb
-    rm -f /tmp/sub.deb
-  fi
 
   # Prevent system updates
   apt-mark hold proxmox-ve
@@ -184,11 +168,11 @@ IUD
   # Update PVE banner to display the IPv4 address
   sed -i "s|https://\${urlip}:8006/|http://127.0.0.1:8006|g" /usr/bin/pvebanner
   sed -i "s|https://\${localip}:8006/|http://127.0.0.1:8006|g" /usr/bin/pvebanner
-  sed -i "s|the Proxmox Virtual Environment\.|${PRODUCT_NAME} v${VERSION_ARG}.|g" /usr/bin/pvebanner
-  sed -i "s|the Pxvirt Powered by Lierfang\.|${PRODUCT_NAME} v${VERSION_ARG}.|g" /usr/bin/pvebanner
+  sed -i "s|the Proxmox Virtual Environment\.|Proxmox for Docker v${VERSION_ARG}.|g" /usr/bin/pvebanner
 
   # Remove kernel modules and boot files — useless in a container (~960 MB)
-  rm -rf /usr/lib/modules /boot
+  rm -rf /usr/lib/modules
+  find /boot -mindepth 1 -delete
 
   # Remove hardware firmware blobs — no physical hardware in a container (~520 MB)
   rm -rf /usr/lib/firmware
@@ -226,8 +210,6 @@ IUD
 
   # Store version number
   echo "$VERSION_ARG" > /etc/version
-  echo "$PRODUCT_NAME" > /etc/product-name
-  echo "$SUPPORT_URL" > /etc/support-url
 
   # Remove stub
   rm /usr/local/sbin/systemctl
@@ -241,12 +223,6 @@ COPY --chmod=755 ./src /usr/local/bin/
 
 ENV PASSWORD="root"
 
-LABEL org.opencontainers.image.title="Tailnet Proxmox" \
-      org.opencontainers.image.version="${VERSION_ARG}" \
-      org.opencontainers.image.url="https://github.com/mayas-alas/tailnet-proxmox" \
-      org.opencontainers.image.source="https://github.com/mayas-alas/tailnet-proxmox" \
-      org.opencontainers.image.documentation="https://github.com/mayas-alas/tailnet-proxmox/blob/master/readme.md"
-
 EXPOSE 8006
 
 VOLUME /var/lib/vz
@@ -254,7 +230,7 @@ VOLUME /var/lib/pve-cluster
 
 STOPSIGNAL SIGRTMIN+3
 HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -kLfSs http://localhost:8006 >/dev/null || exit 1
+    CMD ["curl", "-kLfSs", "http://localhost:8006"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/sbin/init", "--log-target=console", "--log-level=notice"]

@@ -4,65 +4,123 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Image version
+        description: Immutable image release
         required: true
-        default: 0.0.1
+        default: 9.2.21-gnx.1
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: image-${{ github.ref }}
+  group: image-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Version and tools
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_VERSION:-${GITHUB_REF_NAME#v}}"
+          [[ "$version" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
+          mkdir -p build
+      - name: Verify minimal upstream change
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.request import urlopen
+          revision = "5fccb4a7b902f6f150fb440582d7b946bce91042"
+          def upstream(path):
+              with urlopen(f"https://raw.githubusercontent.com/dockur/proxmox/{revision}/{path}") as response:
+                  return response.read().decode()
+          recipe = upstream("Dockerfile")
+          start = recipe.index("  # Disable subscription nag popup\n")
+          end = recipe.index("  # Prevent system updates\n", start)
+          assert Path("Dockerfile").read_text() == recipe[:start] + recipe[end:]
+          for path in ("src/entrypoint.sh", "src/network.sh"):
+              assert Path(path).read_text() == upstream(path)
+          PY
+          bash -n src/entrypoint.sh src/network.sh
+      - name: Build linux/amd64 OCI
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          outputs: type=oci,dest=build/proxmox.oci.tar
+          provenance: false
+          build-args: VERSION_ARG=${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+      - name: Import and verify image content
+        run: |
+          set -euo pipefail
+          skopeo copy oci-archive:build/proxmox.oci.tar docker-daemon:tailnet-proxmox:test
+          docker run --rm --network=none --entrypoint /bin/bash tailnet-proxmox:test -c '
+            set -euo pipefail
+            packages=$(dpkg-query -W -f="\${binary:Package}\n")
+            ! grep -qx pve-fake-subscription <<< "$packages"
+            test ! -e /tmp/sub.deb
+            bash -n /usr/local/bin/entrypoint.sh /usr/local/bin/network.sh
+            dpkg-query -W proxmox-ve pve-manager qemu-server pve-container
+          '
+      - name: Isolated Proxmox boot and KVM
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            sudo modprobe kvm
+            if grep -q AuthenticAMD /proc/cpuinfo; then sudo modprobe kvm_amd; else sudo modprobe kvm_intel; fi
+          fi
+          test -c /dev/kvm
+          sudo modprobe fuse
+          docker run -d --name proxmox-smoke --privileged --device /dev/kvm --device /dev/fuse --shm-size=1g tailnet-proxmox:test
+          for attempt in $(seq 1 180); do
+            if docker exec proxmox-smoke systemctl is-active --quiet pveproxy pvedaemon pvestatd &&
+               docker exec proxmox-smoke curl --fail --silent --insecure https://127.0.0.1:8006/ >/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec proxmox-smoke systemctl is-active --quiet pveproxy pvedaemon pvestatd
+          # Only this disposable test container has a self-signed certificate.
+          # Product gateway/CA validation is unchanged and never bypasses TLS.
+          docker exec proxmox-smoke curl --fail --silent --insecure https://127.0.0.1:8006/ >/dev/null
+          docker exec proxmox-smoke python3 -c 'import fcntl,os; fd=os.open("/dev/kvm",os.O_RDWR); assert fcntl.ioctl(fd,0xAE00,0)>=12; os.close(fd)'
+          docker exec proxmox-smoke qm list
+          docker exec proxmox-smoke pct list
+      - name: Clean test container
+        if: always()
+        run: docker rm -f proxmox-smoke >/dev/null 2>&1 || true
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve version
-        id: version
-        shell: bash
+      - name: Publish exact tested OCI with Skopeo
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          version="${REQUESTED_VERSION:-${GITHUB_REF_NAME#v}}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
-          labels: |
-            org.opencontainers.image.title=Tailnet Proxmox
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          build-args: |
-            VERSION_ARG=${{ steps.version.outputs.version }}
-            PRODUCT_NAME=Tailnet Proxmox
-            SUPPORT_URL=https://github.com/${{ github.repository }}
+          set -euo pipefail
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          target="$repository:$VERSION"
+          if skopeo inspect --authfile "$HOME/.docker/config.json" --tls-verify=true --raw "docker://$target" >/dev/null 2>&1; then
+            echo 'Release already exists; choose a new version instead of overwriting.' >&2
+            exit 1
+          fi
+          digest="sha256:$(skopeo inspect --raw oci-archive:build/proxmox.oci.tar | sha256sum | cut -d' ' -f1)"
+          skopeo copy --preserve-digests --dest-tls-verify=true --dest-authfile "$HOME/.docker/config.json" oci-archive:build/proxmox.oci.tar "docker://$target"
+          actual="sha256:$(skopeo inspect --authfile "$HOME/.docker/config.json" --tls-verify=true --raw "docker://$repository@$digest" | sha256sum | cut -d' ' -f1)"
+          test "$actual" = "$digest"
+          echo "Published image: $repository@$digest"
+          echo "Image: \`$repository@$digest\`" >> "$GITHUB_STEP_SUMMARY"

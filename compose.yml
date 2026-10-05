@@ -1,97 +1,15 @@
-configs:
-  tailscale-serve:
-    content: |
-      {
-        "TCP": {
-          "443": {
-            "HTTPS": true
-          },
-          "2222": {
-            "TCPForward": "pve-backend:22"
-          }
-        },
-        "Web": {
-          "${TS_CERT_DOMAIN:?TS_CERT_DOMAIN is required}:443": {
-            "Handlers": {
-              "/": {
-                "Proxy": "https+insecure://pve-backend:8006"
-              }
-            }
-          }
-        },
-        "AllowFunnel": {
-          "${TS_CERT_DOMAIN:?TS_CERT_DOMAIN is required}:443": false
-        }
-      }
-
 services:
   proxmox:
     hostname: pve
-    build: .
-    image: tailnet-proxmox:0.0.1
+    image: ghcr.io/mayas-alas/tailnet-proxmox:9.2.21-gnx.1
     container_name: proxmox
     environment:
-      PASSWORD: ${PASSWORD:?PASSWORD is required}
-      DEVS: ${DEVS:?DEVS is required}
-      BRIDGES: ${BRIDGES:?BRIDGES is required}
-      GATEWAYS: ${GATEWAYS:?GATEWAYS is required}
+      PASSWORD: "root"
+    ports:
+      - 8006:8006
     volumes:
       - ./data:/var/lib/vz
       - ./config:/var/lib/pve-cluster
-    devices:
-      - /dev/kvm:/dev/kvm
-    networks:
-      pve0:
-        aliases:
-          - pve-backend
-      pve1:
-      pve2:
     restart: always
     privileged: true
     stop_grace_period: 2m
-
-  tailscale:
-    image: tailscale/tailscale:v1.98.4
-    hostname: ${TS_HOSTNAME:-proxmox}
-    environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY is required}
-      TS_HOSTNAME: ${TS_HOSTNAME:-proxmox}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_SERVE_CONFIG: /config/serve.json
-      TS_USERSPACE: "false"
-      TS_AUTH_ONCE: "true"
-      TS_ENABLE_HEALTH_CHECK: "true"
-      TS_LOCAL_ADDR_PORT: 127.0.0.1:41234
-      TS_EXTRA_ARGS: --accept-dns=false --ssh
-    configs:
-      - source: tailscale-serve
-        target: /config/serve.json
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-    networks:
-      - pve0
-    depends_on:
-      proxmox:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"]
-      interval: 1m
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-
-volumes:
-  tailscale-state:
-
-networks:
-  pve0:
-    driver: bridge
-  pve1:
-    driver: bridge
-  pve2:
-    driver: bridge
